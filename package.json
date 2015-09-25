@@ -1,0 +1,24 @@
+{
+  "name": "grapnel-model",
+  "version": "0.1.0",
+  "description": "Model adapter for Grapnel.js",
+  "main": "src/grapnel-model.js",
+  "scripts": {
+    "test": "npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bytecipher/grapnel-model.git"
+  },
+  "keywords": [
+    "grapnel",
+    "router",
+    "model"
+  ],
+  "author": "Greg Sabia Tucker",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/bytecipher/grapnel-model/issues"
+  },
+  "homepage": "https://github.com/bytecipher/grapnel-model#readme"
+}
