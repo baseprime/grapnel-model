@@ -1,8 +1,9 @@
 
+"use strict";
+
 function Model(router) {
-    this.router = router;
-    Module.router = router;
-    return Module;
+    Module.prototype.router = router;
+    return new Module();
 }
 
 var _util = {
@@ -107,24 +108,20 @@ _util.merge(_events, {
     off: _events.unbind
 });
 
-_util.merge(Module, _events);
+function Module(opts){
 
-function Module(attributes) {
-    this.attributes = _util.defaults(attributes || {}, Module.defaults);
-    this.changes = {};
-    this.errors = new ErrorHandler(this);
-    this.uid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        var r = Math.random() * 16 | 0,
-            v = c == 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-    });
+    function ChildModule(attr){
+        return _util.merge(this, new Instance(attr));
+    }
 
-    _util.merge(this, _events);
-
-    if (_util.isFunction(this.initialize)) this.initialize();
+    return _util.merge(ChildModule, this, opts);
 }
 
-Module.middleware = {
+_util.merge(Module.prototype, _events);
+
+Module.prototype.collection = [];
+
+Module.prototype.middleware = {
     oneOrMany: function(Fn) {
         return function(req, res, next) {
             req.class = Fn;
@@ -148,7 +145,7 @@ Module.middleware = {
     }
 }
 
-Module.add = function(obj) {
+Module.prototype.add = function(obj) {
     var self = this;
 
     if (obj instanceof self) {
@@ -173,23 +170,23 @@ Module.add = function(obj) {
     return this;
 }
 
-Module.all = function() {
+Module.prototype.all = function() {
     return this.collection.slice();
 }
 
-Module.chain = function(collection) {
+Module.prototype.chain = function(collection) {
     return _util.merge({}, this, {
         collection: collection || []
     })
 }
 
-Module.count = function() {
+Module.prototype.count = function() {
     return this.all().length;
 }
 
-Module.detect = function(iterator) {
+Module.prototype.detect = function(iterator) {
     var all = this.all(),
-        model
+        model;
 
     for (var i = 0, length = all.length; i < length; i++) {
         model = all[i]
@@ -197,7 +194,7 @@ Module.detect = function(iterator) {
     }
 }
 
-Module.each = function(iterator, context) {
+Module.prototype.each = function(iterator, context) {
     var all = this.all()
 
     for (var i = 0, length = all.length; i < length; i++) {
@@ -207,21 +204,21 @@ Module.each = function(iterator, context) {
     return this;
 }
 
-Module.find = function(id) {
+Module.prototype.find = function(id) {
     return this.detect(function() {
         return this.id() == id;
     })
 }
 
-Module.filter = function(fn) {
+Module.prototype.filter = function(fn) {
     return this.collection.filter(fn);
 }
 
-Module.first = function() {
+Module.prototype.first = function() {
     return this.all()[0]
 }
 
-Module.load = function(callback) {
+Module.prototype.load = function(callback) {
     if (this._persist) {
         var self = this;
 
@@ -237,12 +234,12 @@ Module.load = function(callback) {
     return this;
 }
 
-Module.last = function() {
+Module.prototype.last = function() {
     var all = this.all();
     return all[all.length - 1]
 }
 
-Module.map = function(func, context) {
+Module.prototype.map = function(func, context) {
     var all = this.all()
     var values = []
 
@@ -253,7 +250,7 @@ Module.map = function(func, context) {
     return values
 }
 
-Module.adapter = function(adapter) {
+Module.prototype.adapter = function(adapter) {
     if (arguments.length == 0) {
         return this._persist;
     } else {
@@ -264,7 +261,7 @@ Module.adapter = function(adapter) {
     }
 }
 
-Module.pluck = function(attribute) {
+Module.prototype.pluck = function(attribute) {
     var all = this.all()
     var plucked = []
 
@@ -275,7 +272,7 @@ Module.pluck = function(attribute) {
     return plucked
 }
 
-Module.remove = function(model) {
+Module.prototype.remove = function(model) {
     var index
 
     for (var i = 0, length = this.collection.length; i < length; i++) {
@@ -294,11 +291,11 @@ Module.remove = function(model) {
     }
 }
 
-Module.reverse = function() {
+Module.prototype.reverse = function() {
     return this.chain(this.all().reverse())
 }
 
-Module.select = function(func, context) {
+Module.prototype.select = function(func, context) {
     var all = this.all(),
         selected = [],
         model
@@ -311,12 +308,12 @@ Module.select = function(func, context) {
     return this.chain(selected);
 }
 
-Module.sort = function(func) {
+Module.prototype.sort = function(func) {
     var sorted = this.all().sort(func)
     return this.chain(sorted);
 }
 
-Module.sortBy = function(attribute_or_func) {
+Module.prototype.sortBy = function(attribute_or_func) {
     var is_func = _util.isFunction(attribute_or_func)
     var extract = function(model) {
         return attribute_or_func.call(model)
@@ -336,31 +333,30 @@ Module.sortBy = function(attribute_or_func) {
     })
 }
 
-Module.toJSON = function() {
+Module.prototype.toJSON = function() {
     return this.map(function(model) {
         return model.attributes;
     });
 }
 
-Module.use = function(plugin) {
+Module.prototype.use = function(plugin) {
     var args = Array.prototype.slice.call(arguments, 1)
     args.unshift(this)
     plugin.apply(this, args)
     return this
 }
 
-Module.clone = function() {
-    var Copy = _util.merge(function ChildModule(){
-        Module.apply(this, arguments);
-    }, this);
+Module.prototype.clone = function() {
+    var Copy = new Module();
 
-    Copy.prototype = Module.prototype;
-    Copy.prototype.constructor = this;
+    for(var prop in this){
+        Copy[prop] = this[prop];
+    }
 
     return Copy;
 }
 
-Module.extend = function() {
+Module.prototype.extend = function() {
     var options, name, src, copy, copyIsArray, clone,
         target = arguments[0] || {},
         i = 1,
@@ -421,24 +417,39 @@ Module.extend = function() {
     }
 
     // Return the modified object
-    return target.constructor();
+    return target;
 }
 
-Module.merge = function(obj) {
+Module.prototype.merge = function(obj) {
     _util.merge(this, obj)
     return this
 }
 
-Module.include = function(obj) {
+Module.prototype.include = function(obj) {
     _util.merge(this.prototype, obj)
     return this
 }
 
-Module.parent = function() {
+Module.prototype.parent = function() {
     return this.prototype._parent || {};
 }
 
-Module.prototype = {
+function Instance(attributes) {
+    this.attributes = _util.defaults(attributes || {}, Module.defaults);
+    this.changes = {};
+    this.errors = new ErrorHandler(this);
+    this.uid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0,
+            v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+
+    _util.merge(this, _events);
+
+    if (_util.isFunction(this.initialize)) this.initialize();
+}
+
+Instance.prototype = {
     attr: function(name, value) {
         if (arguments.length === 0) {
             // Combined attributes/changes object.
@@ -564,31 +575,7 @@ Module.prototype = {
     }
 }
 
-Module.constructor = function() {
-    this.collection = [];
-
-    if (_util.isFunction(this.initialize)) {
-        this.prototype.initialize = this.initialize;
-    }
-
-    if(_util.isFunction(this.persist)){
-        this.adapter(this.persist);
-    }
-
-    if (this.url) {
-        Module.routerWithContext = Module.router.context(this.url, Module.middleware.oneOrMany(this));
-        Module.routerWithContext.get('/', Module.middleware.getAll);
-        Module.routerWithContext.get('/:id', Module.middleware.getOne);
-        Module.routerWithContext.post('/', Module.middleware.create);
-        Module.routerWithContext.put('/:id', Module.middleware.update);
-    }
-
-    return this;
-}
-
-Module.prototype.constructor = Module.constructor;
-
-ErrorHandler = function(model) {
+function ErrorHandler(model) {
     this.errors = {};
     this.model = model;
 };
