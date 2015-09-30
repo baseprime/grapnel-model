@@ -1,5 +1,5 @@
 /****
- * Grapnel Model
+ * Grapnel Collection
  * https://github.com/bytecipher/grapnel-model
  *
  * @author Greg Sabia Tucker <greg@bytecipher.io>
@@ -12,12 +12,344 @@
 !(function(root) {
     "use strict";
 
-    function Model(router) {
-        Module.prototype.router = router;
-        return new Module();
+    function Collection(attrs) {
+        _util.merge(this, _events, attrs);
+        this.collection = [];
+
+        if (_util.isFunction(this.persist)) {
+            this.adapter(this.persist);
+        }
+
+        if (this.url) {
+            this.routerWithContext = this.router.context(this.url, this.middleware.oneOrMany(this));
+            this.routerWithContext.get('/', this.middleware.getAll);
+            this.routerWithContext.get('/:id', this.middleware.getOne);
+            this.routerWithContext.post('/', this.middleware.create);
+            this.routerWithContext.put('/:id', this.middleware.update);
+        }
+
+        if (_util.isFunction(this.initialize)) {
+            this.initialize.call(this);
+        }
     }
 
+    function Instance() {
+        return function(attributes) {
+            this.attributes = _util.merge({}, this.constructor.defaults || {}, attributes || {});
+            this.changes = {};
+            this.errors = new ErrorHandler(this);
+            this.uid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16 | 0,
+                    v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+
+            _util.merge(this, _events, _util.modelContext(this))
+
+            if (_util.isFunction(this.initialize)) this.initialize();
+        }
+    }
+
+    Collection.prototype.middleware = {
+        oneOrMany: function(Module) {
+            return function(req, res, next) {
+                req.class = Module;
+
+                if (req.params.id) {
+                    var query = {};
+
+                    query[Module.unique_key] = req.params.id;
+
+                    req.model = Module.find(query) || {};
+                }
+
+                next();
+            }
+        },
+        getOne: function(req, res, next) {
+            res.end(JSON.stringify(req.model.toJSON()));
+        },
+        getAll: function(req, res, next) {
+            res.end(JSON.stringify(req.class.toJSON()));
+        }
+    }
+
+    Collection.prototype.add = function(obj) {
+        var self = this;
+
+        if (obj instanceof self) {
+            var model = obj;
+        } else if (_util.isArray(obj)) {
+            for (var key in obj) {
+                self.add(obj[key]);
+            }
+
+            return this;
+        } else {
+            var model = new self(obj);
+        }
+
+        var id = model.id();
+
+        if (_util.inArray(this.collection, model) === -1 && !(id && this.find(id))) {
+            this.collection.push(model);
+            this.trigger("add", [model]);
+        }
+
+        return this;
+    }
+
+    Collection.prototype.all = function() {
+        return this.collection.slice();
+    }
+
+    Collection.prototype.chain = function(collection) {
+        return _util.merge({}, this, {
+            collection: collection || []
+        });
+    }
+
+    Collection.prototype.count = function() {
+        return this.all().length;
+    }
+
+    Collection.prototype.detect = function(iterator) {
+        var all = this.all(),
+            model;
+
+        for (var i = 0, length = all.length; i < length; i++) {
+            model = all[i]
+            if (iterator.call(model, model, i)) return model
+        }
+    }
+
+    Collection.prototype.each = function(iterator, context) {
+        var all = this.all()
+
+        for (var i = 0, length = all.length; i < length; i++) {
+            iterator.call(context || all[i], all[i], i, all)
+        }
+
+        return this;
+    }
+
+    Collection.prototype.find = function(id) {
+        return this.detect(function() {
+            return this.id() == id;
+        })
+    }
+
+    Collection.prototype.filter = function(fn) {
+        return this.collection.filter(fn);
+    }
+
+    Collection.prototype.first = function() {
+        return this.all()[0]
+    }
+
+    Collection.prototype.load = function(callback) {
+        if (this._persist) {
+            var self = this;
+
+            this._persist.read(function(models) {
+                for (var i = 0, length = models.length; i < length; i++) {
+                    self.add(models[i]);
+                }
+
+                if (callback) callback.call(self, models);
+            })
+        }
+
+        return this;
+    }
+
+    Collection.prototype.last = function() {
+        var all = this.all();
+        return all[all.length - 1]
+    }
+
+    Collection.prototype.map = function(func, context) {
+        var all = this.all()
+        var values = []
+
+        for (var i = 0, length = all.length; i < length; i++) {
+            values.push(func.call(context || all[i], all[i], i, all))
+        }
+
+        return values
+    }
+
+    Collection.prototype.adapter = function(adapter) {
+        if (arguments.length == 0) {
+            return this._persist;
+        } else {
+            var options = Array.prototype.slice.call(arguments, 1);
+            options.unshift(this);
+            this._persist = adapter.apply(this, options);
+            return this;
+        }
+    }
+
+    Collection.prototype.pluck = function(attribute) {
+        var all = this.all()
+        var plucked = []
+
+        for (var i = 0, length = all.length; i < length; i++) {
+            plucked.push(all[i].attr(attribute))
+        }
+
+        return plucked
+    }
+
+    Collection.prototype.remove = function(model) {
+        var index
+
+        for (var i = 0, length = this.collection.length; i < length; i++) {
+            if (this.collection[i] === model) {
+                index = i
+                break
+            }
+        }
+
+        if (index != undefined) {
+            this.collection.splice(index, 1);
+            this.trigger("remove", [model]);
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    Collection.prototype.reverse = function() {
+        return this.chain(this.all().reverse())
+    }
+
+    Collection.prototype.select = function(func, context) {
+        var all = this.all(),
+            selected = [],
+            model
+
+        for (var i = 0, length = all.length; i < length; i++) {
+            model = all[i]
+            if (func.call(context || model, model, i, all)) selected.push(model)
+        }
+
+        return this.chain(selected);
+    }
+
+    Collection.prototype.sort = function(func) {
+        var sorted = this.all().sort(func)
+        return this.chain(sorted);
+    }
+
+    Collection.prototype.sortBy = function(attribute_or_func) {
+        var is_func = _util.isFunction(attribute_or_func)
+        var extract = function(model) {
+            return attribute_or_func.call(model)
+        }
+
+        return this.sort(function(a, b) {
+            var a_attr = is_func ? extract(a) : a.attr(attribute_or_func)
+            var b_attr = is_func ? extract(b) : b.attr(attribute_or_func)
+
+            if (a_attr < b_attr) {
+                return -1
+            } else if (a_attr > b_attr) {
+                return 1
+            } else {
+                return 0
+            }
+        })
+    }
+
+    Collection.prototype.toJSON = function() {
+        return this.map(function(model) {
+            return model.attributes;
+        });
+    }
+
+    Collection.prototype.use = function(plugin) {
+        var args = Array.prototype.slice.call(arguments, 1);
+        args.unshift(this);
+        plugin.apply(this, args);
+
+        return this;
+    }
+
+    Collection.prototype.extend = function(attrs) {
+        var copy = _util.merge({}, this, attrs);
+
+        return _util.merge(new Instance(), new Collection(copy));
+    }
+
+    Collection.prototype.merge = function(obj) {
+        _util.merge(this, obj)
+        return this
+    }
+
+    Collection.prototype.include = function(obj) {
+        _util.merge(this.prototype, obj)
+        return this
+    }
+
+    Collection.prototype.parent = function() {
+        return this.prototype._parent || {};
+    }
+
+    function ErrorHandler(model) {
+        this.errors = {};
+        this.model = model;
+    };
+
+    ErrorHandler.prototype = {
+        add: function(attribute, message) {
+            if (!this.errors[attribute]) this.errors[attribute] = [];
+            this.errors[attribute].push(message);
+            return this
+        },
+
+        all: function() {
+            return this.errors;
+        },
+
+        clear: function() {
+            this.errors = {};
+            return this
+        },
+
+        each: function(func) {
+            for (var attribute in this.errors) {
+                for (var i = 0; i < this.errors[attribute].length; i++) {
+                    func.call(this, attribute, this.errors[attribute][i]);
+                }
+            }
+            return this
+        },
+
+        on: function(attribute) {
+            return this.errors[attribute] || [];
+        },
+
+        size: function() {
+            var count = 0;
+            this.each(function() {
+                count++;
+            });
+            return count;
+        }
+    };
+
+    //////////////////////////////
+
     var _util = {
+        create: function(router) {
+            return (new Collection()).extend({
+                router: router
+            });
+        },
+        modelContext: function(proto){
+            return _util.merge(_instance_proto, { __proto__: proto });
+        },
         merge: function(receiver) {
             var objs = Array.prototype.slice.call(arguments, 1);
 
@@ -104,375 +436,7 @@
         }
     }
 
-    _util.merge(_events, {
-        on: _events.bind,
-        off: _events.unbind
-    });
-
-    function Module(opts) {
-
-        function ChildModule(attr) {
-            return _util.merge(this, new Instance(attr, ChildModule.defaults));
-        }
-
-        ChildModule.constructor = function() {
-
-            this.collection = [];
-
-            if (_util.isFunction(this.initialize)) {
-                this.initialize.call(this);
-            }
-
-            if (_util.isFunction(this.persist)) {
-                this.adapter(this.persist);
-            }
-
-            if (this.url) {
-                this.routerWithContext = this.router.context(this.url, this.middleware.oneOrMany(this));
-                this.routerWithContext.get('/', this.middleware.getAll);
-                this.routerWithContext.get('/:id', this.middleware.getOne);
-                this.routerWithContext.post('/', this.middleware.create);
-                this.routerWithContext.put('/:id', this.middleware.update);
-            }
-
-            return this;
-        }
-
-        return _util.merge(ChildModule, this, opts || {});
-    }
-
-    _util.merge(Module.prototype, _events);
-
-    Module.prototype.middleware = {
-        oneOrMany: function(Fn) {
-            return function(req, res, next) {
-                req.class = Fn;
-
-                if (req.params.id) {
-                    var query = {};
-
-                    query[Module.unique_key] = req.params.id;
-
-                    req.model = Module.find(query) || {};
-                }
-
-                next();
-            }
-        },
-        getOne: function(req, res, next) {
-            res.end(JSON.stringify(req.model.attributes));
-        },
-        getAll: function(req, res, next) {
-            res.end(JSON.stringify(req.class.toJSON()));
-        }
-    }
-
-    Module.prototype.add = function(obj) {
-        var self = this;
-
-        if (obj instanceof self) {
-            var model = obj;
-        } else if (_util.isArray(obj)) {
-            for (var key in obj) {
-                self.add(obj[key]);
-            }
-
-            return this;
-        } else {
-            var model = new self(obj);
-        }
-
-        var id = model.id();
-
-        if (_util.inArray(this.collection, model) === -1 && !(id && this.find(id))) {
-            this.collection.push(model);
-            this.trigger("add", [model]);
-        }
-
-        return this;
-    }
-
-    Module.prototype.all = function() {
-        return this.collection.slice();
-    }
-
-    Module.prototype.chain = function(collection) {
-        return _util.merge({}, this, {
-            collection: collection || []
-        });
-    }
-
-    Module.prototype.count = function() {
-        return this.all().length;
-    }
-
-    Module.prototype.detect = function(iterator) {
-        var all = this.all(),
-            model;
-
-        for (var i = 0, length = all.length; i < length; i++) {
-            model = all[i]
-            if (iterator.call(model, model, i)) return model
-        }
-    }
-
-    Module.prototype.each = function(iterator, context) {
-        var all = this.all()
-
-        for (var i = 0, length = all.length; i < length; i++) {
-            iterator.call(context || all[i], all[i], i, all)
-        }
-
-        return this;
-    }
-
-    Module.prototype.find = function(id) {
-        return this.detect(function() {
-            return this.id() == id;
-        })
-    }
-
-    Module.prototype.filter = function(fn) {
-        return this.collection.filter(fn);
-    }
-
-    Module.prototype.first = function() {
-        return this.all()[0]
-    }
-
-    Module.prototype.load = function(callback) {
-        if (this._persist) {
-            var self = this;
-
-            this._persist.read(function(models) {
-                for (var i = 0, length = models.length; i < length; i++) {
-                    self.add(models[i]);
-                }
-
-                if (callback) callback.call(self, models);
-            })
-        }
-
-        return this;
-    }
-
-    Module.prototype.last = function() {
-        var all = this.all();
-        return all[all.length - 1]
-    }
-
-    Module.prototype.map = function(func, context) {
-        var all = this.all()
-        var values = []
-
-        for (var i = 0, length = all.length; i < length; i++) {
-            values.push(func.call(context || all[i], all[i], i, all))
-        }
-
-        return values
-    }
-
-    Module.prototype.adapter = function(adapter) {
-        if (arguments.length == 0) {
-            return this._persist;
-        } else {
-            var options = Array.prototype.slice.call(arguments, 1);
-            options.unshift(this);
-            this._persist = adapter.apply(this, options);
-            return this;
-        }
-    }
-
-    Module.prototype.pluck = function(attribute) {
-        var all = this.all()
-        var plucked = []
-
-        for (var i = 0, length = all.length; i < length; i++) {
-            plucked.push(all[i].attr(attribute))
-        }
-
-        return plucked
-    }
-
-    Module.prototype.remove = function(model) {
-        var index
-
-        for (var i = 0, length = this.collection.length; i < length; i++) {
-            if (this.collection[i] === model) {
-                index = i
-                break
-            }
-        }
-
-        if (index != undefined) {
-            this.collection.splice(index, 1);
-            this.trigger("remove", [model]);
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    Module.prototype.reverse = function() {
-        return this.chain(this.all().reverse())
-    }
-
-    Module.prototype.select = function(func, context) {
-        var all = this.all(),
-            selected = [],
-            model
-
-        for (var i = 0, length = all.length; i < length; i++) {
-            model = all[i]
-            if (func.call(context || model, model, i, all)) selected.push(model)
-        }
-
-        return this.chain(selected);
-    }
-
-    Module.prototype.sort = function(func) {
-        var sorted = this.all().sort(func)
-        return this.chain(sorted);
-    }
-
-    Module.prototype.sortBy = function(attribute_or_func) {
-        var is_func = _util.isFunction(attribute_or_func)
-        var extract = function(model) {
-            return attribute_or_func.call(model)
-        }
-
-        return this.sort(function(a, b) {
-            var a_attr = is_func ? extract(a) : a.attr(attribute_or_func)
-            var b_attr = is_func ? extract(b) : b.attr(attribute_or_func)
-
-            if (a_attr < b_attr) {
-                return -1
-            } else if (a_attr > b_attr) {
-                return 1
-            } else {
-                return 0
-            }
-        })
-    }
-
-    Module.prototype.toJSON = function() {
-        return this.map(function(model) {
-            return model.attributes;
-        });
-    }
-
-    Module.prototype.use = function(plugin) {
-        var args = Array.prototype.slice.call(arguments, 1);
-        args.unshift(this);
-        plugin.apply(this, args);
-
-        return this;
-    }
-
-    Module.prototype.clone = function() {
-        var Copy = new Module();
-
-        for (var prop in this) {
-            Copy[prop] = this[prop];
-        }
-
-        return Copy.constructor();
-    }
-
-    Module.prototype.extend = function() {
-        var options, name, src, copy, copyIsArray, clone,
-            target = arguments[0] || {},
-            i = 1,
-            length = arguments.length,
-            deep = false;
-
-        // Handle a deep copy situation
-        if (typeof target === "boolean") {
-            deep = target;
-            target = arguments[1] || {};
-            // skip the boolean and the target
-            i = 2;
-        }
-
-        // Handle case when target is a string or something (possible in deep copy)
-        if (typeof target !== "object" && !_util.isFunction(target)) {
-            target = {};
-        }
-
-        // extend jQuery itself if only one argument is passed
-        if (length === i) {
-            target = this.clone();
-            --i;
-        }
-
-        for (; i < length; i++) {
-            // Only deal with non-null/undefined values
-            if ((options = arguments[i]) != null) {
-                // Extend the base object
-                for (name in options) {
-                    src = target[name];
-                    copy = options[name];
-
-                    // Prevent never-ending loop
-                    if (target === copy) {
-                        continue;
-                    }
-
-                    // Recurse if we're merging plain objects or arrays
-                    if (deep && copy && (_util.isPlainObject(copy) || (copyIsArray = _util.isArray(copy)))) {
-                        if (copyIsArray) {
-                            copyIsArray = false;
-                            clone = src && _util.isArray(src) ? src : [];
-
-                        } else {
-                            clone = src && _util.isPlainObject(src) ? src : {};
-                        }
-
-                        // Never move original objects, clone them
-                        target[name] = target.extend(deep, clone, copy);
-
-                        // Don't bring in undefined values
-                    } else if (copy !== undefined) {
-                        target[name] = copy;
-                    }
-                }
-            }
-        }
-
-        // Return the modified object
-        return target;
-    }
-
-    Module.prototype.merge = function(obj) {
-        _util.merge(this, obj)
-        return this
-    }
-
-    Module.prototype.include = function(obj) {
-        _util.merge(this.prototype, obj)
-        return this
-    }
-
-    Module.prototype.parent = function() {
-        return this.prototype._parent || {};
-    }
-
-    function Instance(attributes, defaults) {
-        this.attributes = _util.merge({}, defaults || {}, attributes || {});
-        this.changes = {};
-        this.errors = new ErrorHandler(this);
-        this.uid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-            var r = Math.random() * 16 | 0,
-                v = c == 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
-        });
-
-        _util.merge(this, _events);
-
-        if (_util.isFunction(this.initialize)) this.initialize();
-    }
-
-    Instance.prototype = {
+    var _instance_proto = {
         attr: function(name, value) {
             if (arguments.length === 0) {
                 // Combined attributes/changes object.
@@ -596,60 +560,23 @@
         validate: function() {
             return this;
         }
+
     }
 
-    function ErrorHandler(model) {
-        this.errors = {};
-        this.model = model;
-    };
-
-    ErrorHandler.prototype = {
-        add: function(attribute, message) {
-            if (!this.errors[attribute]) this.errors[attribute] = [];
-            this.errors[attribute].push(message);
-            return this
-        },
-
-        all: function() {
-            return this.errors;
-        },
-
-        clear: function() {
-            this.errors = {};
-            return this
-        },
-
-        each: function(func) {
-            for (var attribute in this.errors) {
-                for (var i = 0; i < this.errors[attribute].length; i++) {
-                    func.call(this, attribute, this.errors[attribute][i]);
-                }
-            }
-            return this
-        },
-
-        on: function(attribute) {
-            return this.errors[attribute] || [];
-        },
-
-        size: function() {
-            var count = 0;
-            this.each(function() {
-                count++;
-            });
-            return count;
-        }
-    };
+    _util.merge(_events, {
+        on: _events.bind,
+        off: _events.unbind
+    });
 
     if ('function' === typeof root.define && !root.define.amd['grapnel-model']) {
         root.define(function(require, exports, module) {
             root.define.amd['grapnel-model'] = true;
-            return Model;
+            return _util.create;
         });
     } else if ('object' === typeof module && 'object' === typeof module.exports) {
-        module.exports = exports = Model;
+        module.exports = exports = _util.create;
     } else {
-        root.Model = Model;
+        root._util.create = _util.create;
     }
 
 }).call({}, ('object' === typeof window) ? window : this);
