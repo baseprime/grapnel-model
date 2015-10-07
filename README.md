@@ -1,2 +1,2 @@
 # grapnel-model
-Model adapter for Grapnel
+Router Model adapter for Grapnel
