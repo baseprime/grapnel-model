@@ -1,5 +1,5 @@
 /****
- * Grapnel Collection
+ * Grapnel Model
  * https://github.com/bytecipher/grapnel-model
  *
  * @author Greg Sabia Tucker <greg@bytecipher.io>
@@ -17,7 +17,7 @@
         this.collection = [];
     }
 
-    function Instance() {
+    function Model() {
         return function(attributes) {
             this.attributes = _util.merge({}, this.constructor.defaults || {}, attributes || {});
             this.changes = {};
@@ -28,9 +28,22 @@
                 return v.toString(16);
             });
 
-            _util.merge(this, _events, _util.modelContext(this))
+            _util.merge(this, _events, _util.modelContext(this));
 
             if (_util.isFunction(this.constructor.initialize)) this.constructor.initialize.call(this);
+        }
+    }
+
+    Collection.prototype.adapter = function(adapter) {
+        if (arguments.length == 0) {
+
+            return this._persist;
+        } else {
+            var options = Array.prototype.slice.call(arguments, 1);
+            options.unshift(this);
+            this._persist = adapter.apply(this, options);
+
+            return this;
         }
     }
 
@@ -96,18 +109,24 @@
         return this;
     }
 
-    Collection.prototype.get = function(id) {
-        return this.detect(function() {
-            return this.id() == id;
-        });
-    }
-
     Collection.prototype.filter = function(iterator) {
         return this.collection.filter(iterator);
     }
 
     Collection.prototype.first = function() {
         return this.all()[0];
+    }
+
+    Collection.prototype.get = function(id) {
+        return this.detect(function() {
+            return this.id() == id;
+        });
+    }
+
+    Collection.prototype.last = function() {
+        var all = this.all();
+
+        return all[all.length - 1];
     }
 
     Collection.prototype.load = function(callback) {
@@ -126,11 +145,6 @@
         return this;
     }
 
-    Collection.prototype.last = function() {
-        var all = this.all();
-        return all[all.length - 1];
-    }
-
     Collection.prototype.map = function(func, context) {
         var all = this.all();
         var values = [];
@@ -142,31 +156,34 @@
         return values;
     }
 
-    Collection.prototype.adapter = function(adapter) {
-        if (arguments.length == 0) {
-            return this._persist;
-        } else {
-            var options = Array.prototype.slice.call(arguments, 1);
-            options.unshift(this);
-            this._persist = adapter.apply(this, options);
-            return this;
-        }
+    Collection.prototype.detailroute = function() {
+        return [this.path, '/:', this.unique_key].reduce(function(left, right) {
+            return ((left.lastIndexOf('/') === left.length - 1) ? left.substr(0, left.length - 1) : left) + right;
+        });
     }
 
-    Collection.prototype.paths = function(){
-        var paths = [],
+    Collection.prototype.depth = function() {
+        var paths = {
+                list: {},
+                detail: {}
+            },
+            depth = 0,
             context = this.parent();
 
         if (!this.path || this.path === context.path) return false;
 
         while (context) {
-            if (context.paths()) paths.push(context.paths());
+            var parentPath = context.depth();
+
+            if (parentPath) {
+                _util.merge(paths, parentPath);
+                depth++;
+            }
+
             context = context.parent();
         }
 
-        return paths.concat([this.path, '/:', this.unique_key, '?']).reduce(function(left, right) {
-            return ((left.lastIndexOf('/') === left.length - 1) ? left.substr(0, left.length - 1) : left) + right;
-        });
+        return paths;
     }
 
     Collection.prototype.pluck = function(attribute) {
@@ -193,6 +210,7 @@
         if (index !== undefined) {
             this.collection.splice(index, 1);
             this.trigger('remove', [model]);
+
             return true;
         } else {
             return false;
@@ -218,6 +236,7 @@
 
     Collection.prototype.sort = function(fn) {
         var sorted = this.all().sort(fn);
+
         return this.chain(sorted);
     }
 
@@ -243,7 +262,7 @@
 
     Collection.prototype.toJSON = function() {
         return this.map(function(model) {
-            return model.attributes;
+            return model.toJSON();
         });
     }
 
@@ -259,19 +278,22 @@
 
     Collection.prototype.extend = function(attrs) {
         var copy = _util.merge({}, this, attrs),
-            Extended = _util.merge(new Instance(), new Collection(copy));
+            Extended = _util.merge(new Model(), new Collection(copy));
 
         return Extended.use(_watcher(this));
     }
 
-    Collection.prototype.merge = function(obj) {
-        _util.merge(this, obj);
-        return this
+    Collection.prototype.merge = function() {
+        var args = Array.prototype.slice.call(arguments);
+        args.unshift(this);
+
+        return _util.merge.apply(this, args);
     }
 
     Collection.prototype.include = function(obj) {
         _util.merge(this.prototype, obj);
-        return this
+
+        return this;
     }
 
     Collection.prototype.parent = function() {
@@ -317,82 +339,18 @@
         }
     };
 
-    function Middleware(module) {
-        this.module = module;
-
-        if (module.path) {
-            this.path = [module.path, '/:', module.unique_key, '?'].reduce(function(left, right) {
-                return ((left.lastIndexOf('/') === left.length - 1) ? left.substr(0, left.length - 1) : left) + right;
-            });
-
-            this.router = module.router.context(this.path);
-        } else {
-            this.router = module.router;
-        }
-
-        this.router.get('/', this.modelMiddleware());
-
-        if (module.routes) {
-            for (var key in module.routes) {
-                var value = module.routes[key];
-
-                var method = value.method || 'GET',
-                    handler = value.handler || value;
-
-                if (module.hasOwnProperty(handler)) {
-                    this.router[method.toLowerCase()](key, module[handler]);
-                }
-            }
-        }
-    }
-
-    Middleware.prototype = {
-        getOne: function() {
-            var module = this.module;
-
-            return function() {
-
-            }
-        },
-        modelMiddleware: function() {
-            var module = this.module;
-            return function(req, res, next) {
-                module.load(function() {
-                    if (req.params[module.unique_key]) {
-
-                        req.model = module.get(req.params[module.unique_key]);
-
-                        if (req.model) {
-                            res.end(JSON.stringify(req.model.attr()));
-                        } else {
-                            res.statusCode = 404;
-                            res.end();
-                        }
-                    } else {
-                        res.end(JSON.stringify(this.toJSON()));
-                    }
-                });
-            }
-        }
-    }
-
     var _util = {
-        create: function(router) {
-            return (new Collection()).extend({
-                router: router
-            });
-        },
         modelContext: function(proto) {
-            return _util.merge(_instance_proto, {
+            return _util.merge(_model_proto, {
                 __proto__: proto
             });
         },
         merge: function(receiver) {
-            var objs = Array.prototype.slice.call(arguments, 1);
+            var args = Array.prototype.slice.call(arguments, 1);
 
-            for (var i = 0, length = objs.length; i < length; i++) {
-                for (var property in objs[i]) {
-                    receiver[property] = objs[i][property];
+            for (var i = 0, length = args.length; i < length; i++) {
+                for (var property in args[i]) {
+                    receiver[property] = args[i][property];
                 }
             }
 
@@ -419,7 +377,7 @@
     }
 
     var _events = {
-        bind: function(event, callback) {
+        on: function(event, callback) {
             this.events = this.events || {};
             this.events[event] = this.events[event] || [];
             this.events[event].push(callback);
@@ -439,7 +397,7 @@
 
             return this;
         },
-        unbind: function(event, callback) {
+        off: function(event, callback) {
             this.events = this.events || {};
 
             if (callback) {
@@ -459,7 +417,7 @@
         once: function(event, callback) {
             var ran = false;
 
-            return this.bind(event, function() {
+            return this.on(event, function() {
                 if (ran) return false;
                 ran = true;
                 callback.apply(this, arguments);
@@ -471,24 +429,42 @@
 
     var _watcher = function(context) {
         return function() {
-
             this._parent = context;
+            var self = this;
 
             if (_util.isFunction(this.persist)) {
                 this.adapter(this.persist);
             }
 
-            if (false && this.path) {
-                var path = [this.path, '/:', this.unique_key, '?'].reduce(function(left, right) {
-                    return ((left.lastIndexOf('/') === left.length - 1) ? left.substr(0, left.length - 1) : left) + right;
+            if (this.path) {
+
+                this.contextRouter = this.parent().contextRouter || this.router.context(this.path, function(req, res, next) {
+                    req.collection = self;
+                    next();
                 });
+
+                var addRoute = function(path, handler, method) {
+                    if (Module.middleware.hasOwnProperty(handler)) {
+                        self.contextRouter[method || 'get'](path, Module.middleware[handler]);
+                    }
+                }
+
+                for (var path in this.routes) {
+                    if (_util.isPlainObject(this.routes[path])) {
+                        for (var method in this.routes[path]) {
+                            addRoute(path, this.routes[path][method], method);
+                        }
+                    } else {
+                        addRoute(path, this.routes[path]);
+                    }
+                }
+
             }
 
-            new Middleware(this);
         }
     }
 
-    var _instance_proto = {
+    var _model_proto = {
         attr: function(name, value) {
             if (arguments.length === 0) {
                 // Combined attributes/changes object.
@@ -531,27 +507,26 @@
                 }
             };
 
-            // Wrap the existing callback in this function so we always manage the
-            // collection and trigger events from here rather than relying on the
-            // persist adapter to do it for us. The persist adapter is
-            // only required to execute the callback with a single argument - a
-            // boolean to indicate whether the call was a success - though any
-            // other arguments will also be forwarded to the original callback.
+            /****
+             * Wrap the existing callback in this function so we always manage the
+             * collection and trigger events from here rather than relying on the
+             * persist adapter to do it for us. The persist adapter is
+             * only required to execute the callback with a single argument - a
+             * boolean to indicate whether the call was a success - though any
+             * other arguments will also be forwarded to the original callback.
+             */
             function wrappedCallback(success) {
                 if (success) {
                     // Merge any changes into attributes and clear changes.
                     self.merge(self.changes).reset();
-
                     // Add/remove from collection if persist was successful.
                     manageCollection();
-
                     // Trigger the event before executing the callback.
                     self.trigger(method);
                 }
 
                 // Store the return value of the callback.
                 var value;
-
                 // Run the supplied callback.
                 if (callback) value = callback.apply(self, arguments);
 
@@ -573,19 +548,38 @@
         },
         merge: function(attributes) {
             _util.merge(this.attributes, attributes);
+
             return this;
+        },
+        get: function(prop) {
+            return this.attr.call(this, prop);
+        },
+        set: function(prop, value) {
+            return this.attr.call(this, prop, value);
         },
         isNew: function() {
             return this.id() === undefined;
         },
+        pick: function(keys) {
+            var result = {},
+                attrs = this.attr();
+
+            for (var prop in keys) {
+                var key = keys[prop];
+                result[key] = attrs[key];
+            }
+
+            return result;
+        },
         reset: function() {
             this.errors.clear();
             this.changes = {};
+
             return this;
         },
         save: function(callback) {
             if (this.valid()) {
-                var method = this.isNew() ? 'create' : 'update';
+                var method = (this.isNew()) ? 'create' : 'update';
                 this.callPersistMethod(method, callback);
             } else if (callback) {
                 callback(false);
@@ -599,6 +593,7 @@
         valid: function() {
             this.errors.clear();
             this.validate();
+
             return this.errors.size() === 0;
         },
         validate: function() {
@@ -606,20 +601,63 @@
         }
     }
 
-    _util.merge(_events, {
-        on: _events.bind,
-        off: _events.unbind
-    });
+    function Module(router){
+        return (new Collection()).extend({
+            router: router
+        });
+    }
+
+    Module.middleware = {
+        index: function(req, res, next) {
+            res.statusCode = 200;
+            res.end(JSON.stringify(req.collection.toJSON()));
+        },
+        details: function(req, res, next) {
+            var model = req.collection.get(req.params.id);
+
+            if (model) {
+                res.statusCode = 200;
+                res.end(JSON.stringify(model.toJSON()));
+            } else {
+                Module.middleware.notfound(req, res, next);
+            }
+        },
+        create: function(req, res, next) {
+            var Model = req.collection,
+                model = new Model(req.body).save();
+
+            res.statusCode = 201;
+            res.end(JSON.stringify(model.toJSON()));
+        },
+        update: function(req, res, next) {
+            var model = req.collection.get(req.params.id);
+
+            if (model) {
+                model.attr(req.body).save();
+                res.statusCode = 204;
+                res.end(JSON.stringify(model.toJSON()));
+            } else {
+                Module.middleware.notfound(req, res, next);
+            }
+        },
+        notfound: function(req, res, next) {
+            res.statusCode = 404;
+            res.end(JSON.stringify({
+                error: true,
+                message: 'Cannot find resource'
+            }));
+        }
+    }
 
     if ('function' === typeof root.define && !root.define.amd['grapnel-model']) {
         root.define(function(require, exports, module) {
             root.define.amd['grapnel-model'] = true;
-            return _util.create;
+            return Module;
         });
     } else if ('object' === typeof module && 'object' === typeof module.exports) {
-        module.exports = exports = _util.create;
+        module.exports = exports = Module;
     } else {
-        root._util.create = _util.create;
+        root.Model = Module;
     }
 
 }).call({}, ('object' === typeof window) ? window : this);
