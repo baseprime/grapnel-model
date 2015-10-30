@@ -17,8 +17,8 @@
         this.collection = [];
     }
 
-    function Model() {
-        return function(attributes) {
+    function Factory(__super) {
+        function Model(attributes) {
             this.attributes = _util.merge({}, this.constructor.defaults || {}, attributes || {});
             this.changes = {};
             this.errors = new ErrorHandler(this);
@@ -28,10 +28,13 @@
                 return v.toString(16);
             });
 
-            _util.merge(this, _events, _util.modelContext(this));
-
-            if (_util.isFunction(this.constructor.initialize)) this.constructor.initialize.call(this);
+            if (_util.isFunction(this.constructor.initialize)) this.constructor.initialize.apply(this, arguments);
         }
+
+        Model.prototype = _util.merge({}, _events, _model_proto, __super.prototype);
+        Model.prototype.constructor = Model;
+
+        return Model;
     }
 
     Collection.prototype.adapter = function(adapter) {
@@ -53,8 +56,8 @@
         if (obj.constructor === this) {
             var model = obj;
         } else if (_util.isArray(obj)) {
-            for (var key in obj) {
-                self.add(obj[key]);
+            for (var index in obj) {
+                self.add(obj[index]);
             }
 
             return this;
@@ -278,9 +281,9 @@
 
     Collection.prototype.extend = function(attrs) {
         var copy = _util.merge({}, this, attrs),
-            Extended = _util.merge(new Model(), new Collection(copy));
+            Extended = _util.merge(new Factory(this), new Collection(copy));
 
-        return Extended.use(_watcher(this));
+        return Extended.use(_router(this));
     }
 
     Collection.prototype.merge = function() {
@@ -340,11 +343,6 @@
     };
 
     var _util = {
-        modelContext: function(proto) {
-            return _util.merge(_model_proto, {
-                __proto__: proto
-            });
-        },
         merge: function(receiver) {
             var args = Array.prototype.slice.call(arguments, 1);
 
@@ -427,7 +425,7 @@
         }
     }
 
-    var _watcher = function(context) {
+    var _router = function(context) {
         return function() {
             this._parent = context;
             var self = this;
@@ -458,7 +456,6 @@
                         addRoute(path, this.routes[path]);
                     }
                 }
-
             }
 
         }
@@ -501,9 +498,9 @@
             // Automatically manage adding and removing from the model's Collection.
             var manageCollection = function() {
                 if (method === 'destroy') {
-                    self.constructor.remove(self)
+                    self.constructor.remove(self);
                 } else {
-                    self.constructor.add(self)
+                    self.constructor.add(self);
                 }
             };
 
@@ -542,6 +539,11 @@
         destroy: function(callback) {
             this.callPersistMethod('destroy', callback);
             return this;
+        },
+        extend: function() {
+            var args = [{}, this.constructor.prototype].concat(Array.prototype.slice.call(arguments));
+
+            return _util.merge.apply({}, args);
         },
         id: function() {
             return this.attributes[this.constructor.unique_key];
@@ -601,7 +603,7 @@
         }
     }
 
-    function Module(router){
+    function Module(router) {
         return (new Collection()).extend({
             router: router
         });
@@ -623,8 +625,8 @@
             }
         },
         create: function(req, res, next) {
-            var Model = req.collection,
-                model = new Model(req.body).save();
+            var Fn = req.collection,
+                model = new Fn(req.body).save();
 
             res.statusCode = 201;
             res.end(JSON.stringify(model.toJSON()));
